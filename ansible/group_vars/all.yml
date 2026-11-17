@@ -1,0 +1,14 @@
+# Non-sensitive values only. Filled from the Infrastructure Pipeline outputs (Task 5).
+backend_private_ip: "__BACKEND_PRIVATE_IP__"   # Nginx -> backend (private network)
+mysql_fqdn: "__MYSQL_FQDN__"                   # private RDS endpoint
+
+app_port: 8080
+db_name: bookstore
+app_user: ubuntu
+app_dir: /opt/epicbook
+app_repo: https://github.com/Ella3323/epicbook-ado.git
+app_version: main        # the pipeline overrides this with the exact commit being deployed
+node_major: 20
+
+# db_admin_username / db_admin_password are NEVER stored here.
+# They are supplied at runtime from the Azure DevOps secret variable group.

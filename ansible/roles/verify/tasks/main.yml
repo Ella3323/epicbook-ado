@@ -1,0 +1,82 @@
+---
+- name: Backend checks
+  when: inventory_hostname in groups['backend']
+  block:
+    - name: EpicBook service is active
+      ansible.builtin.command: systemctl is-active epicbook
+      changed_when: false
+
+    - name: EpicBook is listening on the app port
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ app_port }}"
+        timeout: 30
+
+    - name: EpicBook answers HTTP locally
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ app_port }}/"
+        status_code: 200
+
+    - name: Count authors in MySQL
+      community.mysql.mysql_query:
+        login_host: "{{ mysql_fqdn }}"
+        login_user: "{{ db_admin_username }}"
+        login_password: "{{ db_admin_password }}"
+        login_db: "{{ db_name }}"
+        query: "SELECT COUNT(*) AS n FROM Author"
+      register: v_authors
+      no_log: true
+
+    - name: Count books in MySQL
+      community.mysql.mysql_query:
+        login_host: "{{ mysql_fqdn }}"
+        login_user: "{{ db_admin_username }}"
+        login_password: "{{ db_admin_password }}"
+        login_db: "{{ db_name }}"
+        query: "SELECT COUNT(*) AS n FROM Book"
+      register: v_books
+      no_log: true
+
+    - name: Required tables contain seed data
+      ansible.builtin.assert:
+        that:
+          - v_authors.query_result[0][0].n | int > 0
+          - v_books.query_result[0][0].n | int > 0
+        fail_msg: "Author/Book tables are empty - seed import failed."
+
+    - name: Database summary (non-sensitive)
+      ansible.builtin.debug:
+        msg: "MySQL OK - Author rows: {{ v_authors.query_result[0][0].n }}, Book rows: {{ v_books.query_result[0][0].n }}"
+
+- name: Frontend checks
+  when: inventory_hostname in groups['frontend']
+  block:
+    - name: Nginx is active
+      ansible.builtin.command: systemctl is-active nginx
+      changed_when: false
+
+    - name: Nginx configuration is valid
+      ansible.builtin.command: nginx -t
+      changed_when: false
+
+    - name: Frontend reaches the backend over the private network
+      ansible.builtin.uri:
+        url: "http://{{ backend_private_ip }}:{{ app_port }}/"
+        status_code: 200
+
+    - name: EpicBook loads through Nginx on port 80
+      ansible.builtin.uri:
+        url: "http://localhost/"
+        status_code: 200
+        return_content: true
+      register: home_page
+
+    - name: Personalised footer is present
+      ansible.builtin.assert:
+        that:
+          - "'Deployed by' in home_page.content"
+        fail_msg: "Home page loaded but the 'Deployed by' footer is missing."
+
+    - name: Frontend summary
+      ansible.builtin.debug:
+        msg: "Nginx OK - EpicBook served through Nginx (HTTP {{ home_page.status }}) with personalised footer."

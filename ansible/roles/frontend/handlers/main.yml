@@ -1,0 +1,10 @@
+---
+# Handlers run in this order: the config is tested BEFORE the reload.
+- name: Test nginx configuration
+  ansible.builtin.command: nginx -t
+  changed_when: false
+
+- name: Reload nginx
+  ansible.builtin.systemd:
+    name: nginx
+    state: reloaded
