@@ -1,2 +1,11 @@
 node_modules
 .DS_Store
+
+# --- Ansible / SSH / secrets ---
+*.pem
+*.key
+epicbook-aws-key
+*.retry
+.vault_pass*
+**/vault.yml
+.env
