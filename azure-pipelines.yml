@@ -1,19 +1,228 @@
-# Starter pipeline
-# Start with a minimal pipeline that you can customize to build and deploy your code.
-# Add steps that build, run tests, deploy, and more:
-# https://aka.ms/yaml
+# EpicBook Application Pipeline
+# Prepare -> Validate -> Configure & Deploy -> Verify
+# Runs on the self-hosted agent (WSL) so SSH to the VMs comes from the one approved IP.
 
 trigger:
-- main
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - ansible
+      - server.js
+      - package.json
+      - package-lock.json
+      - config
+      - db
+      - models
+      - routes
+      - views
+      - public
+      - azure-pipelines.yml
+
+pr: none
+
+variables:
+  - group: Epicbook-mysql-secrets      # mysqlAdminUsername, mysqlAdminPassword (secret)
+  - name: sshKeySecureFile
+    value: 'epicbook-aws-key'
+  - name: ansibleDir
+    value: '$(System.DefaultWorkingDirectory)/ansible'
+  # Host keys are still checked - just against a per-job known_hosts file (see keyscan step)
+  - name: ANSIBLE_SSH_COMMON_ARGS
+    value: '-o UserKnownHostsFile=$(Agent.TempDirectory)/known_hosts'
 
 pool:
-  vmImage: ubuntu-latest
+  name: SelfHostedPool
 
-steps:
-- script: echo Hello, world!
-  displayName: 'Run a one-line script'
+stages:
+# ---------------------------------------------------------------------------
+- stage: Prepare
+  displayName: 'Prepare'
+  jobs:
+  - job: Prepare
+    displayName: 'Tools, collections and SSH key'
+    steps:
+    - checkout: self
 
-- script: |
-    echo Add other tasks to build, test, and deploy your project.
-    echo See https://aka.ms/yaml
-  displayName: 'Run a multi-line script'
+    - script: |
+        set -euo pipefail
+        python3 --version
+        ansible --version | head -1
+        ansible-galaxy collection install -r requirements.yml
+      displayName: 'Verify Python/Ansible + install required collections'
+      workingDirectory: $(ansibleDir)
+
+    - task: DownloadSecureFile@1
+      name: sshKey
+      displayName: 'Download SSH private key (Secure Files)'
+      inputs:
+        secureFile: $(sshKeySecureFile)
+
+    # Temporary path only - never copied into the repo or published.
+    - script: |
+        set -euo pipefail
+        chmod 600 "$(sshKey.secureFilePath)"
+        ssh-keygen -y -f "$(sshKey.secureFilePath)" > /dev/null && echo "SSH key downloaded, permissions 600, key is valid."
+      displayName: 'Restrict key permissions and validate it'
+
+# ---------------------------------------------------------------------------
+- stage: Validate
+  displayName: 'Validate'
+  dependsOn: Prepare
+  jobs:
+  - job: Validate
+    displayName: 'Inventory, syntax, handoff values, connectivity'
+    steps:
+    - checkout: self
+
+    # Each job gets a fresh temp dir, so the key is downloaded again per job.
+    - task: DownloadSecureFile@1
+      name: sshKey
+      displayName: 'Download SSH private key (Secure Files)'
+      inputs:
+        secureFile: $(sshKeySecureFile)
+
+    - script: |
+        set -euo pipefail
+        chmod 600 "$(sshKey.secureFilePath)"
+        umask 077
+        printf 'db_admin_username: "%s"\ndb_admin_password: "%s"\n' "$DB_USER" "$DB_PASS" > "$(Agent.TempDirectory)/db-secrets.yml"
+        [ -n "$DB_USER" ] && echo "DB username: present"
+        [ -n "$DB_PASS" ] && echo "DB password: present (value hidden)"
+      displayName: 'Prepare secrets file (temp, 600) - values never printed'
+      env:
+        DB_USER: $(mysqlAdminUsername)
+        DB_PASS: $(mysqlAdminPassword)
+
+    - script: |
+        set -euo pipefail
+        ansible-inventory --graph
+        ansible-playbook site.yml --syntax-check
+      displayName: 'Validate inventory + playbook syntax'
+      workingDirectory: $(ansibleDir)
+
+    - script: |
+        set -euo pipefail
+        ansible-playbook site.yml --limit localhost -e @"$(Agent.TempDirectory)/db-secrets.yml"
+      displayName: 'Preflight: handoff values filled + secrets available'
+      workingDirectory: $(ansibleDir)
+
+    - script: |
+        set -euo pipefail
+        KH="$(Agent.TempDirectory)/known_hosts"
+        for h in $(grep -oP 'ansible_host=\K\S+' inventory/hosts.ini); do
+          ssh-keyscan -T 10 -H "$h" >> "$KH" 2>/dev/null || true
+        done
+        test -s "$KH" || { echo "##[error]Could not fetch host keys - are the VMs up and is port 22 open to this agent's IP?"; exit 1; }
+        ansible epicbook -m ping --private-key "$(sshKey.secureFilePath)"
+      displayName: 'Record host keys + test SSH connectivity to both VMs'
+      workingDirectory: $(ansibleDir)
+
+    - script: rm -f "$(Agent.TempDirectory)/db-secrets.yml"
+      displayName: 'Remove temp secrets file'
+      condition: always()
+
+# ---------------------------------------------------------------------------
+- stage: Deploy
+  displayName: 'Configure and Deploy'
+  dependsOn: Validate
+  jobs:
+  - job: Deploy
+    displayName: 'Run site.yml'
+    steps:
+    - checkout: self
+
+    - task: DownloadSecureFile@1
+      name: sshKey
+      displayName: 'Download SSH private key (Secure Files)'
+      inputs:
+        secureFile: $(sshKeySecureFile)
+
+    - script: |
+        set -euo pipefail
+        chmod 600 "$(sshKey.secureFilePath)"
+        umask 077
+        printf 'db_admin_username: "%s"\ndb_admin_password: "%s"\n' "$DB_USER" "$DB_PASS" > "$(Agent.TempDirectory)/db-secrets.yml"
+        KH="$(Agent.TempDirectory)/known_hosts"
+        for h in $(grep -oP 'ansible_host=\K\S+' "$(ansibleDir)/inventory/hosts.ini"); do
+          ssh-keyscan -T 10 -H "$h" >> "$KH" 2>/dev/null || true
+        done
+        echo "Key, secrets file and known_hosts ready."
+      displayName: 'Prepare key, secrets file and known_hosts'
+      env:
+        DB_USER: $(mysqlAdminUsername)
+        DB_PASS: $(mysqlAdminPassword)
+
+    # Deploys the exact commit this run was triggered by. Secret tasks use no_log.
+    - script: |
+        set -euo pipefail
+        ansible-playbook site.yml \
+          --private-key "$(sshKey.secureFilePath)" \
+          -e @"$(Agent.TempDirectory)/db-secrets.yml" \
+          -e app_version="$(Build.SourceVersion)" \
+          | tee "$(Agent.TempDirectory)/ansible-run.log"
+        sed -n '/PLAY RECAP/,$p' "$(Agent.TempDirectory)/ansible-run.log" > "$(Build.ArtifactStagingDirectory)/ansible-recap.txt"
+      displayName: 'ansible-playbook site.yml'
+      workingDirectory: $(ansibleDir)
+
+    - script: rm -f "$(Agent.TempDirectory)/db-secrets.yml"
+      displayName: 'Remove temp secrets file'
+      condition: always()
+
+    # Only the play recap (host names + counters) is published - no secrets, no key.
+    - publish: $(Build.ArtifactStagingDirectory)/ansible-recap.txt
+      artifact: ansible-recap
+      displayName: 'Publish play recap'
+
+# ---------------------------------------------------------------------------
+- stage: Verify
+  displayName: 'Verify'
+  dependsOn: Deploy
+  jobs:
+  - job: Verify
+    displayName: 'Recap + end-to-end checks'
+    steps:
+    - checkout: self
+
+    - download: current
+      artifact: ansible-recap
+      displayName: 'Download play recap'
+
+    - script: |
+        set -euo pipefail
+        RECAP="$(Pipeline.Workspace)/ansible-recap/ansible-recap.txt"
+        echo "================ ANSIBLE PLAY RECAP ================"
+        cat "$RECAP"
+        echo "===================================================="
+        grep -q "epicbook-frontend" "$RECAP" && grep -q "epicbook-backend" "$RECAP"
+        if grep -E "unreachable=[1-9]|failed=[1-9]" "$RECAP"; then
+          echo "##[error]Play recap shows failed or unreachable hosts."; exit 1
+        fi
+        echo "Play recap OK: 0 failed, 0 unreachable on all hosts."
+      displayName: 'Confirm 0 failed / 0 unreachable'
+
+    - script: |
+        set -euo pipefail
+        APP_IP=$(grep -A1 '^\[frontend\]' ansible/inventory/hosts.ini | grep -oP 'ansible_host=\K\S+')
+        BACKEND_IP=$(grep -A1 '^\[backend\]' ansible/inventory/hosts.ini | grep -oP 'ansible_host=\K\S+')
+        MYSQL_HOST=$(grep -oP '^mysql_fqdn:\s*"\K[^"]+' ansible/group_vars/all.yml)
+
+        CODE=$(curl -s -o /tmp/epicbook-home.html -w '%{http_code}' --max-time 15 "http://$APP_IP/")
+        [ "$CODE" = "200" ] || { echo "##[error]Frontend returned HTTP $CODE"; exit 1; }
+        grep -q "Deployed by" /tmp/epicbook-home.html || { echo "##[error]Footer missing"; exit 1; }
+        echo "PASS  EpicBook via Nginx: http://$APP_IP/  (HTTP 200, footer present)"
+
+        if curl -s --max-time 5 "http://$BACKEND_IP:8080/" > /dev/null; then
+          echo "##[error]Backend port 8080 is reachable from the internet!"; exit 1
+        fi
+        echo "PASS  Backend port 8080 is NOT reachable from the internet"
+
+        if timeout 5 bash -c "</dev/tcp/$MYSQL_HOST/3306" 2>/dev/null; then
+          echo "##[error]MySQL 3306 is reachable from outside the VPC!"; exit 1
+        fi
+        echo "PASS  MySQL 3306 is NOT reachable from outside the VPC (private access only)"
+
+        echo ""
+        echo "Open in a browser: http://$APP_IP/"
+      displayName: 'End-to-end checks from outside'
