@@ -1,6 +1,6 @@
 # Non-sensitive values only. Filled from the Infrastructure Pipeline outputs (Task 5).
-backend_private_ip: "__BACKEND_PRIVATE_IP__"   # Nginx -> backend (private network)
-mysql_fqdn: "__MYSQL_FQDN__"                   # private RDS endpoint
+backend_private_ip: "10.20.2.196"   # Nginx -> backend (private network)
+mysql_fqdn: "epicbook-a04-mysql.cu94228kuzth.us-east-1.rds.amazonaws.com"                   # private RDS endpoint
 
 app_port: 8080
 db_name: bookstore
