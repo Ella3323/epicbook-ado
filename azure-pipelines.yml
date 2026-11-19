@@ -104,7 +104,7 @@ stages:
 
     - script: |
         set -euo pipefail
-        ansible-playbook site.yml --limit localhost -e @"$(Agent.TempDirectory)/db-secrets.yml"
+        ansible-playbook preflight.yml -e @"$(Agent.TempDirectory)/db-secrets.yml"
       displayName: 'Preflight: handoff values filled + secrets available'
       workingDirectory: $(ansibleDir)
 

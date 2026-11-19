@@ -1,0 +1,23 @@
+---
+- name: Preflight - handoff values and secrets present
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Handoff values have been filled in (no placeholders left)
+      ansible.builtin.assert:
+        that:
+          - "'__' not in backend_private_ip"
+          - "'__' not in mysql_fqdn"
+          - "'__' not in hostvars[groups['frontend'][0]]['ansible_host']"
+          - "'__' not in hostvars[groups['backend'][0]]['ansible_host']"
+        fail_msg: "Placeholder found - complete the Task 5 handoff (inventory + group_vars) first."
+        success_msg: "All four handoff values are present."
+
+    - name: Database credentials were supplied (values not shown)
+      ansible.builtin.assert:
+        that:
+          - db_admin_username is defined and db_admin_username | length > 0
+          - db_admin_password is defined and db_admin_password | length > 0
+        fail_msg: "db_admin_username / db_admin_password missing - pass them from the secret variable group."
+        success_msg: "Database credentials are available."
+      no_log: true
