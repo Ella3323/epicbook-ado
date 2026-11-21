@@ -1,0 +1,43 @@
+========================================
+CI/CD Pipeline Failure Triage Report
+========================================
+Full Name: Pamela Chidinma Ezeotika
+Timestamp: 2026-11-21T00:12:29Z
+Provider: Azure DevOps
+Organization: https://dev.azure.com/pamela0473
+Project: EpicBook-Deployment
+
+Category matches are heuristic evidence; counts represent findings.
+----------------------------------------
+Infrastructure Pipeline (Pipeline ID: 1)
+----------------------------------------
+Run ID: 21
+Branch: refs/heads/main
+Status: completed
+Result: succeeded
+Completion Time: 2026-11-20T21:53:37.286169+00:00
+[PASS] Infrastructure Pipeline — Latest completed run succeeded
+
+----------------------------------------
+Application Pipeline (Pipeline ID: 2)
+----------------------------------------
+Run ID: 24
+Branch: refs/heads/drill/pipeline-failure
+Status: completed
+Result: failed
+Completion Time: 2026-11-21T00:02:17.729442+00:00
+Retrieving step console logs for build 24 ...
+[FAIL] Application Pipeline — Test Failure
+    Evidence: 2026-11-21T00:01:29.5206234Z AssertionError: '8080' != '8081'
+
+
+Summary:
+PASS: 1
+WARN: 0
+FAIL: 1
+ERROR: 0
+Overall Status: FAIL
+Script Exit Code: 2
+Report File: /home/admn/ansible-onboarding/epicbook-ado/assignment-05-pipeline-triage/reports/pipeline-health-report.txt
+Infrastructure Log: /home/admn/ansible-onboarding/epicbook-ado/assignment-05-pipeline-triage/reports/infra-last-run.log
+Application Log: /home/admn/ansible-onboarding/epicbook-ado/assignment-05-pipeline-triage/reports/app-last-run.log

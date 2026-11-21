@@ -1,0 +1,2 @@
+# raw logs may contain infrastructure details - keep out of Git
+reports/*.log
